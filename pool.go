@@ -66,28 +66,43 @@ func (skp *SketchPool) MustPut(sk *Sketch) {
 }
 
 type SketchPoolPool struct {
-	pools [15]*SketchPool
+	sparse [15]*SketchPool
+	normal [15]*SketchPool
 }
 
 func NewSketchPoolPool() *SketchPoolPool {
 	skpp := &SketchPoolPool{}
-	for i := range skpp.pools {
-		skpp.pools[i] = NewSketchPool(uint8(i+4), true)
+	for i := 0; i < len(skpp.sparse); i++ {
+		skpp.sparse[i] = NewSketchPool(uint8(i+4), true)
+		skpp.normal[i] = NewSketchPool(uint8(i+4), false)
 	}
 
 	return skpp
 }
 
-func (skpp *SketchPoolPool) Get(precision uint8) (*Sketch, error) {
-	return skpp.pools[precision-4].Get()
+func (skpp *SketchPoolPool) Get(precision uint8, sparse bool) (*Sketch, error) {
+	if sparse {
+		return skpp.sparse[precision-4].Get()
+	}
+	return skpp.normal[precision-4].Get()
 }
 
-func (skpp *SketchPoolPool) MustGet(precision uint8) *Sketch {
-	return skpp.pools[precision-4].MustGet()
+func (skpp *SketchPoolPool) MustGet(precision uint8, sparse bool) *Sketch {
+	if sparse {
+		return skpp.sparse[precision-4].MustGet()
+	}
+	return skpp.normal[precision-4].MustGet()
 }
 
 func (skpp *SketchPoolPool) Put(sk *Sketch) error {
-	return skpp.pools[sk.p-4].Put(sk)
+	if sk == nil {
+		return nil
+	}
+
+	if sk.s {
+		return skpp.sparse[sk.p-4].Put(sk)
+	}
+	return skpp.normal[sk.p-4].Put(sk)
 }
 
 func (skpp *SketchPoolPool) MustPut(sk *Sketch) {
@@ -95,5 +110,9 @@ func (skpp *SketchPoolPool) MustPut(sk *Sketch) {
 		return
 	}
 
-	skpp.pools[sk.p-4].MustPut(sk)
+	if sk.s {
+		skpp.sparse[sk.p-4].MustPut(sk)
+		return
+	}
+	skpp.normal[sk.p-4].MustPut(sk)
 }
