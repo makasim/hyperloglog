@@ -64,3 +64,32 @@ func (skp *SketchPool) MustPut(sk *Sketch) {
 		panic(err)
 	}
 }
+
+type SketchPoolPool struct {
+	pools [14]*SketchPool
+}
+
+func NewSketchPoolPool() *SketchPoolPool {
+	skpp := &SketchPoolPool{}
+	for i := range skpp.pools {
+		skpp.pools[i] = NewSketchPool(uint8(i+4), true)
+	}
+
+	return skpp
+}
+
+func (skpp *SketchPoolPool) Get(precision uint8) (*Sketch, error) {
+	return skpp.pools[precision].Get()
+}
+
+func (skpp *SketchPoolPool) MustGet(precision uint8) *Sketch {
+	return skpp.pools[precision].MustGet()
+}
+
+func (skpp *SketchPoolPool) Put(sk *Sketch) error {
+	return skpp.pools[sk.p].Put(sk)
+}
+
+func (skpp *SketchPoolPool) MustPut(sk *Sketch) {
+	skpp.pools[sk.p].MustPut(sk)
+}
