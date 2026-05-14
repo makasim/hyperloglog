@@ -66,7 +66,7 @@ func (skp *SketchPool) MustPut(sk *Sketch) {
 }
 
 type SketchPoolPool struct {
-	pools [14]*SketchPool
+	pools [15]*SketchPool
 }
 
 func NewSketchPoolPool() *SketchPoolPool {
@@ -79,17 +79,21 @@ func NewSketchPoolPool() *SketchPoolPool {
 }
 
 func (skpp *SketchPoolPool) Get(precision uint8) (*Sketch, error) {
-	return skpp.pools[precision].Get()
+	return skpp.pools[precision-4].Get()
 }
 
 func (skpp *SketchPoolPool) MustGet(precision uint8) *Sketch {
-	return skpp.pools[precision].MustGet()
+	return skpp.pools[precision-4].MustGet()
 }
 
 func (skpp *SketchPoolPool) Put(sk *Sketch) error {
-	return skpp.pools[sk.p].Put(sk)
+	return skpp.pools[sk.p-4].Put(sk)
 }
 
 func (skpp *SketchPoolPool) MustPut(sk *Sketch) {
-	skpp.pools[sk.p].MustPut(sk)
+	if sk == nil {
+		return
+	}
+
+	skpp.pools[sk.p-4].MustPut(sk)
 }
