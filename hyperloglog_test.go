@@ -126,7 +126,7 @@ func TestHLL_toNormal(t *testing.T) {
 	c := sk.Estimate()
 	require.EqualValues(t, 1, c)
 
-	require.False(t, sk.sparse(), "toNormal should convert to normal")
+	require.False(t, sk.Sparse(), "toNormal should convert to normal")
 
 	sk = NewTestSketch(16)
 	sk.Insert(toByte(0x00010fffffffffff))
@@ -209,8 +209,8 @@ func TestHLL_Merge_Sparse(t *testing.T) {
 	n := sk2.Estimate()
 	require.EqualValues(t, 5, n)
 
-	require.True(t, sk2.sparse(), "Merge should convert to normal")
-	require.True(t, sk.sparse(), "Merge should not modify argument")
+	require.True(t, sk2.Sparse(), "Merge should convert to normal")
+	require.True(t, sk.Sparse(), "Merge should not modify argument")
 
 	require.NoError(t, sk2.Merge(sk))
 	n = sk2.Estimate()
