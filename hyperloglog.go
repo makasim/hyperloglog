@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"sync"
 )
 
 const (
@@ -15,8 +16,12 @@ const (
 )
 
 type Sketch struct {
-	p          uint8
-	m          uint32
+	p uint8
+	m uint32
+	// createdSparse records whether the sketch was originally created with sparse mode.
+	// Use Sparse() to check current state.
+	createdSparse bool
+
 	alpha      float64
 	tmpSet     set
 	sparseList *compressedList
@@ -49,20 +54,22 @@ func NewSketch(precision uint8, sparse bool) (*Sketch, error) {
 	}
 	m := uint32(1) << precision
 	s := &Sketch{
-		m:     m,
-		p:     precision,
+		m:             m,
+		p:             precision,
+		createdSparse: sparse,
+
 		alpha: alpha(float64(m)),
 	}
 	if sparse {
 		s.tmpSet = makeSet(0)
-		s.sparseList = newCompressedList(0)
+		s.sparseList = getCompressedList(0)
 	} else {
 		s.regs = make([]uint8, m)
 	}
 	return s, nil
 }
 
-func (sk *Sketch) sparse() bool { return sk.sparseList != nil }
+func (sk *Sketch) Sparse() bool { return sk.sparseList != nil }
 
 // Clone returns a deep copy of sk.
 func (sk *Sketch) Clone() *Sketch {
@@ -71,6 +78,23 @@ func (sk *Sketch) Clone() *Sketch {
 	clone.tmpSet = sk.tmpSet.Clone()
 	clone.sparseList = sk.sparseList.Clone()
 	return &clone
+}
+
+func (sk *Sketch) Reset() {
+	if sk.Sparse() {
+		sk.tmpSet.reset()
+		sk.sparseList.reset()
+		return
+	}
+
+	if sk.createdSparse {
+		sk.tmpSet = makeSet(0)
+		sk.sparseList = getCompressedList(0)
+		sk.regs = nil
+		return
+	}
+
+	clear(sk.regs)
 }
 
 func (sk *Sketch) maybeToNormal() {
@@ -90,7 +114,7 @@ func (sk *Sketch) Merge(other *Sketch) error {
 		return errors.New("precisions must be equal")
 	}
 
-	if sk.sparse() && other.sparse() {
+	if sk.Sparse() && other.Sparse() {
 		sk.mergeSparseSketch(other)
 	} else {
 		sk.mergeDenseSketch(other)
@@ -107,11 +131,11 @@ func (sk *Sketch) mergeSparseSketch(other *Sketch) {
 }
 
 func (sk *Sketch) mergeDenseSketch(other *Sketch) {
-	if sk.sparse() {
+	if sk.Sparse() {
 		sk.toNormal()
 	}
 
-	if other.sparse() {
+	if other.Sparse() {
 		other.tmpSet.ForEach(func(k uint32) {
 			i, r := decodeHash(k, other.p, pp)
 			sk.insert(i, r)
@@ -141,6 +165,7 @@ func (sk *Sketch) toNormal() {
 	}
 
 	sk.tmpSet = nilSet
+	putCompressedList(sk.sparseList)
 	sk.sparseList = nil
 }
 
@@ -148,7 +173,7 @@ func (sk *Sketch) insert(i uint32, r uint8) { sk.regs[i] = max(r, sk.regs[i]) }
 func (sk *Sketch) Insert(e []byte)          { sk.InsertHash(hash(e)) }
 
 func (sk *Sketch) InsertHash(x uint64) {
-	if sk.sparse() {
+	if sk.Sparse() {
 		if sk.tmpSet.add(encodeHash(x, sk.p, pp)) {
 			sk.maybeToNormal()
 		}
@@ -159,7 +184,7 @@ func (sk *Sketch) InsertHash(x uint64) {
 }
 
 func (sk *Sketch) Estimate() uint64 {
-	if sk.sparse() {
+	if sk.Sparse() {
 		sk.mergeSparse()
 		return uint64(linearCount(mp, mp-sk.sparseList.count))
 	}
@@ -182,7 +207,7 @@ func (sk *Sketch) mergeSparse() {
 	})
 	slices.Sort(keys)
 
-	newList := newCompressedList(4*sk.tmpSet.Len() + sk.sparseList.Len())
+	newList := getCompressedList(4*sk.tmpSet.Len() + sk.sparseList.Len())
 	for iter, i := sk.sparseList.Iter(), 0; iter.HasNext() || i < len(keys); {
 		if !iter.HasNext() {
 			newList.Append(keys[i])
@@ -210,8 +235,10 @@ func (sk *Sketch) mergeSparse() {
 		}
 	}
 
+	putCompressedList(sk.sparseList)
+
 	sk.sparseList = newList
-	sk.tmpSet = makeSet(0)
+	sk.tmpSet.reset()
 }
 
 // MarshalBinary implements the encoding.BinaryMarshaler interface.
@@ -232,7 +259,7 @@ func (sk *Sketch) AppendBinary(data []byte) ([]byte, error) {
 	// Marshal b
 	data = append(data, 0)
 
-	if sk.sparse() {
+	if sk.Sparse() {
 		// It's using the sparse Sketch.
 		data = append(data, byte(1))
 
@@ -351,4 +378,69 @@ func (sk *Sketch) unmarshalBinaryV1(data []byte, b uint8) error {
 func (sk *Sketch) unmarshalBinaryV2(data []byte) error {
 	sk.regs = data[8:]
 	return nil
+}
+
+var compressedListPools = newCompressedListPools()
+
+func newCompressedListPools() [8]*sync.Pool {
+	pools := [8]*sync.Pool{}
+	for i := 0; i < len(pools); i++ {
+		pools[i] = &sync.Pool{}
+	}
+	return pools
+}
+
+func getCompressedList(requestedCapacity int) *compressedList {
+	var pool *sync.Pool
+	var capacity int
+	if capacity = 256; requestedCapacity < capacity {
+		pool = compressedListPools[0]
+	} else if capacity = 512; requestedCapacity < capacity {
+		pool = compressedListPools[1]
+	} else if capacity = 1024; requestedCapacity < capacity {
+		pool = compressedListPools[2]
+	} else if capacity = 2048; requestedCapacity < capacity {
+		pool = compressedListPools[3]
+	} else if capacity = 4096; requestedCapacity < capacity {
+		pool = compressedListPools[4]
+	} else if capacity = 8192; requestedCapacity < capacity {
+		pool = compressedListPools[5]
+	} else if capacity = 16384; requestedCapacity < capacity {
+		pool = compressedListPools[6]
+	} else {
+		capacity = requestedCapacity
+		pool = compressedListPools[7]
+	}
+
+	c := pool.Get()
+	if c == nil {
+		return newCompressedList(capacity - 1)
+	}
+
+	c1 := c.(*compressedList)
+	c1.b = slices.Grow(c1.b, capacity-1)
+	return c1
+}
+
+func putCompressedList(c *compressedList) {
+	c.reset()
+	capacity := cap(c.b)
+
+	if capacity < 256 {
+		compressedListPools[0].Put(c)
+	} else if capacity < 512 {
+		compressedListPools[1].Put(c)
+	} else if capacity < 1024 {
+		compressedListPools[2].Put(c)
+	} else if capacity < 2048 {
+		compressedListPools[3].Put(c)
+	} else if capacity < 4096 {
+		compressedListPools[4].Put(c)
+	} else if capacity < 8192 {
+		compressedListPools[5].Put(c)
+	} else if capacity < 16384 {
+		compressedListPools[6].Put(c)
+	} else {
+		compressedListPools[7].Put(c)
+	}
 }

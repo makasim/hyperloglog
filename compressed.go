@@ -54,6 +54,16 @@ func (v *compressedList) Clone() *compressedList {
 	return newV
 }
 
+func (v *compressedList) reset() {
+	if v == nil {
+		return
+	}
+
+	v.count = 0
+	v.last = 0
+	v.b = v.b[:0]
+}
+
 func (v *compressedList) AppendBinary(data []byte) ([]byte, error) {
 	// At least 4 bytes for the two fixed sized values
 	data = slices.Grow(data, 4+4)
